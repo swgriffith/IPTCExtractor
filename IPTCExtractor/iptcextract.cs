@@ -1,22 +1,22 @@
+using Microsoft.Azure.WebJobs;
+using Microsoft.Azure.WebJobs.Extensions.Http;
+using Microsoft.Azure.WebJobs.Host;
+using Newtonsoft.Json;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
-using Microsoft.Azure.WebJobs;
-using Microsoft.Azure.WebJobs.Extensions.Http;
-using Microsoft.Azure.WebJobs.Host;
-using Newtonsoft.Json;
 using System.Windows.Media.Imaging;
-using System;
 
 namespace IPTCExtractor
 {
     public static class iptcextract
     {
         [FunctionName("iptcextract")]
-        public static async Task<HttpResponseMessage> Run([HttpTrigger(AuthorizationLevel.Function, "get", "post", Route = null)]HttpRequestMessage req, TraceWriter log)
+        public static async Task<HttpResponseMessage> Run([HttpTrigger(AuthorizationLevel.Function, "post", Route = null)]HttpRequestMessage req, TraceWriter log)
         {
             log.Info("IPTC Extract Triggered");
 
@@ -27,46 +27,65 @@ namespace IPTCExtractor
 
                 respMessage outputObj = new respMessage();
 
+                //If the request body has data in the values array, start processing
                 if (reqData.values.Count > 0)
                 {                
                     outputObj.values = new List<OutputItem>();
 
+                    //for each item in the array process each image
                     foreach (var item in reqData.values)
                     {
+                        //convert from base64 encoding into byte array for further processing
                         byte[] imageBytes = Convert.FromBase64String(item.data.imagedata);
                         MemoryStream ms = new MemoryStream(imageBytes);
 
+                        //get metadata from the image
                         JpegBitmapDecoder decoder = new JpegBitmapDecoder(ms, BitmapCreateOptions.None, BitmapCacheOption.None);
                         BitmapMetadata metadata = decoder.Frames[0].Metadata as BitmapMetadata;
 
+                        //build output object for this image
                         if (metadata != null)
                         {
-                            outputObj.values.Add(new OutputItem
+                            OutputItem outItem = new OutputItem();
+                            outItem.recordId = item.recordId;
+                            outItem.data = new OutputData();
+                            if (metadata.Author != null)
                             {
-                                recordId = item.recordId,
-                                data = new OutputData
-                                {
-                                    author = metadata.Author.ToList<string>(),
-                                    copyright = metadata.Copyright,
-                                    datetaken = metadata.DateTaken,
-                                    location = metadata.Location,
-                                    keywords = metadata.Keywords.ToList<string>()
-                                }
-                            });
+                                outItem.data.author = metadata.Author.ToList<string>();
+                            }
+                            outItem.data.copyright = metadata.Copyright;
+                            outItem.data.datetaken = ConvertDateFormat(metadata.DateTaken);
+                            outItem.data.location = metadata.Location;
+                            if (metadata.Keywords !=null)
+                            {
+                                outItem.data.keywords = metadata.Keywords.ToList<string>();
+                            }
+                            outputObj.values.Add(outItem);
+                        }
+                        else
+                        {
+                            //if no metadata found for an image throw an exception
+                            //TODO: Does it make sense ot return an empty array element for an image with no metadata
+                            throw new Exception("No metadata found for image");
                         }
 
                     }
                 }
-
-                string output = JsonConvert.SerializeObject(outputObj);
-
-                return req.CreateResponse(HttpStatusCode.OK, output);
+                //send response object
+                return req.CreateResponse(HttpStatusCode.OK, outputObj);
             }
             catch (Exception ex)
             {
-                return req.CreateResponse(HttpStatusCode.BadRequest, "Processing Error");
+                //return error object for any exceptions caught
+                return req.CreateResponse(HttpStatusCode.BadRequest, string.Format("Processing Error: %0", ex.Message));
             }
 
+        }
+
+        private static string ConvertDateFormat(string inputDate)
+        {
+            DateTime stage = DateTime.Parse(inputDate);
+            return stage.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
         }
 
         //private static respMessage getSampleData()
